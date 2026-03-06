@@ -3,6 +3,7 @@ import {
   isSwigTransaction,
   parseSwigTransaction,
   getTokenPayerFromTransaction,
+  filterFeeTransfers,
 } from "./utils";
 
 export interface NormalizedTransaction {
@@ -14,12 +15,19 @@ export interface NormalizedTransaction {
   payer: string;
 }
 
+export interface NormalizationContext {
+  asset: string;
+  payTo: string;
+  signerAddresses: string[];
+}
+
 export interface TransactionNormalizer {
   canHandle(instructions: ReadonlyArray<Instruction>): boolean;
   normalize(
     instructions: ReadonlyArray<Instruction>,
     staticAccounts: ReadonlyArray<Address>,
     transaction: Transaction,
+    context?: NormalizationContext,
   ): Promise<NormalizedTransaction>;
 }
 
@@ -31,10 +39,21 @@ class SwigNormalizer implements TransactionNormalizer {
   async normalize(
     instructions: ReadonlyArray<Instruction>,
     staticAccounts: ReadonlyArray<Address>,
+    _transaction: Transaction,
+    context?: NormalizationContext,
   ): Promise<NormalizedTransaction> {
     const result = await parseSwigTransaction(instructions, staticAccounts);
+    let flatInstructions = result.instructions;
+    if (context) {
+      flatInstructions = await filterFeeTransfers(
+        flatInstructions,
+        context.asset,
+        context.payTo,
+        context.signerAddresses,
+      );
+    }
     return {
-      instructions: result.instructions,
+      instructions: flatInstructions,
       payer: result.swigPda,
     };
   }
@@ -73,10 +92,11 @@ export async function normalizeTransaction(
   instructions: ReadonlyArray<Instruction>,
   staticAccounts: ReadonlyArray<Address>,
   transaction: Transaction,
+  context?: NormalizationContext,
 ): Promise<NormalizedTransaction> {
   for (const n of defaultNormalizers) {
     if (n.canHandle(instructions)) {
-      return await n.normalize(instructions, staticAccounts, transaction);
+      return await n.normalize(instructions, staticAccounts, transaction, context);
     }
   }
   throw new Error("no normalizer found for transaction");
