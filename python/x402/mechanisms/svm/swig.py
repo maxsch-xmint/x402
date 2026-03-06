@@ -12,10 +12,15 @@ except ImportError as e:
 
 from .constants import (
     COMPUTE_BUDGET_PROGRAM_ADDRESS,
+    ERR_NO_TRANSFER_INSTRUCTION,
+    ERR_SUSPICIOUS_FEE_TRANSFER,
     SECP256R1_PRECOMPILE_ADDRESS,
     SWIG_PROGRAM_ADDRESS,
     SWIG_SIGN_V2_DISCRIMINATOR,
+    TOKEN_2022_PROGRAM_ADDRESS,
+    TOKEN_PROGRAM_ADDRESS,
 )
+from .utils import derive_ata
 
 
 @dataclass
@@ -275,3 +280,74 @@ def parse_swig_transaction(tx: VersionedTransaction) -> ParseSwigResult:
             )
 
     return ParseSwigResult(instructions=result, swig_pda=swig_pda)
+
+
+def _try_decode_transfer_checked(
+    account_keys: list[Pubkey], inst: NormalizedInstruction
+) -> tuple[bool, str, str]:
+    """Check if a normalized instruction is SPL TransferChecked.
+
+    Returns (is_transfer_checked, source_address, dest_address).
+    """
+    if inst.program_id_index >= len(account_keys):
+        return False, "", ""
+
+    prog_id = account_keys[inst.program_id_index]
+    token_program = Pubkey.from_string(TOKEN_PROGRAM_ADDRESS)
+    token_2022_program = Pubkey.from_string(TOKEN_2022_PROGRAM_ADDRESS)
+    if prog_id != token_program and prog_id != token_2022_program:
+        return False, "", ""
+
+    if len(inst.data) < 10 or inst.data[0] != 12:
+        return False, "", ""
+
+    if len(inst.accounts) < 4:
+        return False, "", ""
+
+    source_idx = inst.accounts[0]
+    dest_idx = inst.accounts[2]
+    if source_idx >= len(account_keys) or dest_idx >= len(account_keys):
+        return False, "", ""
+
+    return True, str(account_keys[source_idx]), str(account_keys[dest_idx])
+
+
+def filter_fee_transfers(
+    account_keys: list[Pubkey],
+    instructions: list[NormalizedInstruction],
+    asset: str,
+    pay_to: str,
+    signer_addresses: list[str],
+) -> list[NormalizedInstruction]:
+    """Remove Swig fee transfers, keeping only the merchant transfer.
+
+    Returns [ComputeLimit, ComputePrice, MerchantTransfer, ...nonTransferTail].
+    """
+    expected_merchant_ata = derive_ata(pay_to, asset, TOKEN_PROGRAM_ADDRESS)
+    expected_merchant_ata_2022 = derive_ata(pay_to, asset, TOKEN_2022_PROGRAM_ADDRESS)
+
+    merchant_transfer: NormalizedInstruction | None = None
+    non_transfer_tail: list[NormalizedInstruction] = []
+
+    for i in range(2, len(instructions)):
+        inst = instructions[i]
+        is_tc, source_addr, dest_addr = _try_decode_transfer_checked(account_keys, inst)
+
+        if not is_tc:
+            non_transfer_tail.append(inst)
+            continue
+
+        if dest_addr == expected_merchant_ata or dest_addr == expected_merchant_ata_2022:
+            merchant_transfer = inst
+        else:
+            # Fee transfer — safety check
+            for signer_addr in signer_addresses:
+                if source_addr == signer_addr or dest_addr == signer_addr:
+                    raise ValueError(ERR_SUSPICIOUS_FEE_TRANSFER)
+            if source_addr == pay_to or dest_addr == pay_to:
+                raise ValueError(ERR_SUSPICIOUS_FEE_TRANSFER)
+
+    if merchant_transfer is None:
+        raise ValueError(ERR_NO_TRANSFER_INSTRUCTION)
+
+    return [instructions[0], instructions[1], merchant_transfer, *non_transfer_tail]

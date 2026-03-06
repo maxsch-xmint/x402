@@ -22,6 +22,7 @@ from .constants import (
     ERR_NO_TRANSFER_INSTRUCTION,
     ERR_RECIPIENT_MISMATCH,
     ERR_SIMULATION_FAILED,
+    ERR_SUSPICIOUS_FEE_TRANSFER,
     ERR_TRANSACTION_DECODE_FAILED,
     ERR_TRANSACTION_FAILED,
     ERR_UNKNOWN_FIFTH_INSTRUCTION,
@@ -56,7 +57,7 @@ from .constants import (
 )
 
 # Normalizer
-from .normalizer import NormalizedTransaction, normalize_transaction
+from .normalizer import NormalizationContext, NormalizedTransaction, normalize_transaction
 
 # Signer protocols
 from .signer import ClientSvmSigner, FacilitatorSvmSigner
@@ -75,6 +76,7 @@ from .types import (
 # Swig
 from .swig import (
     decode_swig_compact_instructions,
+    filter_fee_transfers,
     is_swig_transaction,
     parse_swig_transaction,
 )
@@ -148,6 +150,7 @@ __all__ = [
     "ERR_FEE_PAYER_MISSING",
     "ERR_FEE_PAYER_NOT_MANAGED",
     "ERR_FEE_PAYER_TRANSFERRING",
+    "ERR_SUSPICIOUS_FEE_TRANSFER",
     "ERR_SIMULATION_FAILED",
     "ERR_TRANSACTION_FAILED",
     # Types
@@ -165,9 +168,11 @@ __all__ = [
     "is_swig_transaction",
     "parse_swig_transaction",
     "decode_swig_compact_instructions",
+    "filter_fee_transfers",
     # Normalizer
     "normalize_transaction",
     "NormalizedTransaction",
+    "NormalizationContext",
     # Utilities
     "normalize_network",
     "get_network_config",

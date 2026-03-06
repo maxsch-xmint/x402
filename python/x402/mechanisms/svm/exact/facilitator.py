@@ -44,7 +44,7 @@ from ..constants import (
     TOKEN_2022_PROGRAM_ADDRESS,
     TOKEN_PROGRAM_ADDRESS,
 )
-from ..normalizer import normalize_transaction
+from ..normalizer import NormalizationContext, normalize_transaction
 from ..signer import FacilitatorSvmSigner
 from ..types import ExactSvmPayload
 from ..utils import (
@@ -167,10 +167,15 @@ class ExactSvmScheme:
 
         # Normalize the transaction (handles Swig, regular, and future wallet types)
         try:
-            normalized = normalize_transaction(tx)
-        except Exception:
+            norm_ctx = NormalizationContext(
+                asset=requirements.asset,
+                pay_to=requirements.pay_to,
+                signer_addresses=list(signer_addresses),
+            )
+            normalized = normalize_transaction(tx, norm_ctx)
+        except Exception as e:
             return VerifyResponse(
-                is_valid=False, invalid_reason=ERR_NO_TRANSFER_INSTRUCTION, payer=""
+                is_valid=False, invalid_reason=str(e), payer=""
             )
 
         instructions = normalized.instructions
