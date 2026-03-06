@@ -18,8 +18,15 @@ import {
   type RpcMainnet,
   type SolanaRpcApiMainnet,
 } from "@solana/kit";
-import { TOKEN_PROGRAM_ADDRESS } from "@solana-program/token";
-import { TOKEN_2022_PROGRAM_ADDRESS } from "@solana-program/token-2022";
+import {
+  parseTransferCheckedInstruction as parseTransferCheckedInstructionToken,
+  TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
+import {
+  findAssociatedTokenPda,
+  parseTransferCheckedInstruction as parseTransferCheckedInstruction2022,
+  TOKEN_2022_PROGRAM_ADDRESS,
+} from "@solana-program/token-2022";
 import type { Network } from "@x402/core/types";
 import {
   SVM_ADDRESS_REGEX,
@@ -39,6 +46,7 @@ import {
   SECP256R1_PRECOMPILE_ADDRESS,
 } from "./constants";
 import type { ExactSvmPayloadV1 } from "./types";
+import type { NormalizedTransaction } from "./normalizer";
 
 /**
  * Normalize network identifier to CAIP-2 format
@@ -425,4 +433,117 @@ export function decodeSwigCompactInstructions(data: Uint8Array): SwigCompactInst
 
   return results;
 }
+
+// ─── Transfer validation ────────────────────────────────────────────────────
+
+/**
+ * Try to parse an instruction as TransferChecked (SPL Token or Token-2022).
+ * Returns the parsed result or null if not a valid TransferChecked.
+ */
+export function tryParseTransferChecked(instruction: { programAddress: Address; [key: string]: unknown }): {
+  accounts: {
+    source: { address: Address };
+    destination: { address: Address };
+    authority: { address: Address };
+    mint: { address: Address };
+  };
+  data: { amount: bigint };
+} | null {
+  const programAddress = instruction.programAddress.toString();
+  const tokenProgramStr = TOKEN_PROGRAM_ADDRESS.toString();
+  const token2022ProgramStr = TOKEN_2022_PROGRAM_ADDRESS.toString();
+
+  if (programAddress !== tokenProgramStr && programAddress !== token2022ProgramStr) {
+    return null;
+  }
+
+  try {
+    if (programAddress === tokenProgramStr) {
+      return parseTransferCheckedInstructionToken(instruction as never) as never;
+    } else {
+      return parseTransferCheckedInstruction2022(instruction as never) as never;
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Derive the expected associated token account for an owner.
+ * Tries SPL Token first, then Token-2022.
+ */
+async function deriveExpectedATA(asset: string, owner: string): Promise<string> {
+  try {
+    const [ata] = await findAssociatedTokenPda({
+      mint: asset as Address,
+      owner: owner as Address,
+      tokenProgram: TOKEN_PROGRAM_ADDRESS as Address,
+    });
+    return ata.toString();
+  } catch {
+    const [ata] = await findAssociatedTokenPda({
+      mint: asset as Address,
+      owner: owner as Address,
+      tokenProgram: TOKEN_2022_PROGRAM_ADDRESS as Address,
+    });
+    return ata.toString();
+  }
+}
+
+/**
+ * Filter fee transfers out of a flattened Swig instruction list, returning only
+ * [ComputeLimit, ComputePrice, MerchantTransfer, ...nonTransferTail].
+ *
+ * Called by SwigNormalizer when a NormalizationContext is provided.
+ *
+ * @param instructions  - Flattened instruction array from parseSwigTransaction
+ * @param asset         - Required token mint address
+ * @param payTo         - Merchant owner address
+ * @param signerAddresses - Facilitator fee payer addresses
+ * @returns Filtered instruction array with fee transfers removed
+ */
+export async function filterFeeTransfers(
+  instructions: NormalizedTransaction["instructions"],
+  asset: string,
+  payTo: string,
+  signerAddresses: string[],
+): Promise<NormalizedTransaction["instructions"]> {
+  const expectedMerchantATA = await deriveExpectedATA(asset, payTo);
+
+  let merchantTransfer: NormalizedTransaction["instructions"][number] | undefined;
+  const nonTransferTail: NormalizedTransaction["instructions"] = [];
+
+  for (let i = 2; i < instructions.length; i++) {
+    const parsed = tryParseTransferChecked(instructions[i] as never);
+    if (!parsed) {
+      nonTransferTail.push(instructions[i]);
+      continue;
+    }
+
+    const destATA = parsed.accounts.destination.address.toString();
+
+    if (destATA === expectedMerchantATA) {
+      merchantTransfer = instructions[i];
+    } else {
+      // Fee transfer — safety check: neither source nor destination touches signer or payTo
+      const sourceAddress = parsed.accounts.source.address.toString();
+      if (
+        signerAddresses.includes(sourceAddress) ||
+        signerAddresses.includes(destATA) ||
+        sourceAddress === payTo ||
+        destATA === payTo
+      ) {
+        throw new Error("invalid_exact_svm_payload_suspicious_fee_transfer");
+      }
+      // Fee transfer is safe — strip it from output
+    }
+  }
+
+  if (!merchantTransfer) {
+    throw new Error("invalid_exact_svm_payload_no_transfer_instruction");
+  }
+
+  return [instructions[0], instructions[1], merchantTransfer, ...nonTransferTail];
+}
+
 

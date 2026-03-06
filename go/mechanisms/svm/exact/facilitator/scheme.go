@@ -122,9 +122,14 @@ func (f *ExactSvmScheme) Verify(
 	}
 
 	// Normalize the transaction (handles Swig, regular, and future wallet types)
-	normalized, err := svm.NormalizeTransaction(tx)
+	normCtx := &svm.NormalizationContext{
+		Asset:           requirements.Asset,
+		PayTo:           requirements.PayTo,
+		SignerAddresses: signerAddressStrs,
+	}
+	normalized, err := svm.NormalizeTransaction(tx, normCtx)
 	if err != nil {
-		return nil, x402.NewVerifyError(ErrNoTransferInstruction, "", err.Error())
+		return nil, x402.NewVerifyError(err.Error(), "", err.Error())
 	}
 	instructions := normalized.Instructions
 	payer := normalized.Payer

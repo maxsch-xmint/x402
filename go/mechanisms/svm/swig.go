@@ -17,13 +17,20 @@ func (s *SwigNormalizer) CanHandle(tx *solana.Transaction) bool {
 	return IsSwigTransaction(tx)
 }
 
-func (s *SwigNormalizer) Normalize(tx *solana.Transaction) (*NormalizedTransaction, error) {
+func (s *SwigNormalizer) Normalize(tx *solana.Transaction, ctx *NormalizationContext) (*NormalizedTransaction, error) {
 	result, err := ParseSwigTransaction(tx)
 	if err != nil {
 		return nil, err
 	}
+	instructions := result.Instructions
+	if ctx != nil {
+		instructions, err = FilterFeeTransfers(tx, instructions, ctx.Asset, ctx.PayTo, ctx.SignerAddresses)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &NormalizedTransaction{
-		Instructions: result.Instructions,
+		Instructions: instructions,
 		Payer:        result.SwigPDA,
 	}, nil
 }
@@ -281,4 +288,105 @@ func ParseSwigTransaction(tx *solana.Transaction) (*ParseSwigResult, error) {
 		Instructions: result,
 		SwigPDA:      swigPDA,
 	}, nil
+}
+
+// FilterFeeTransfers removes Swig fee transfers from a flattened instruction list,
+// returning [ComputeLimit, ComputePrice, MerchantTransfer, ...nonTransferTail].
+//
+// It identifies the merchant transfer by matching the destination ATA derived from
+// asset + payTo. All other TransferChecked instructions are considered fee transfers
+// and are stripped, after a safety check that they don't touch signer or payTo addresses.
+func FilterFeeTransfers(
+	tx *solana.Transaction,
+	instructions []solana.CompiledInstruction,
+	asset string,
+	payTo string,
+	signerAddresses []string,
+) ([]solana.CompiledInstruction, error) {
+	// Derive expected merchant ATA
+	payToPubkey, err := solana.PublicKeyFromBase58(payTo)
+	if err != nil {
+		return nil, fmt.Errorf("invalid payTo address: %w", err)
+	}
+	mintPubkey, err := solana.PublicKeyFromBase58(asset)
+	if err != nil {
+		return nil, fmt.Errorf("invalid asset address: %w", err)
+	}
+	expectedMerchantATA, _, err := solana.FindAssociatedTokenAddress(payToPubkey, mintPubkey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive merchant ATA: %w", err)
+	}
+
+	var merchantTransfer *solana.CompiledInstruction
+	var nonTransferTail []solana.CompiledInstruction
+
+	for i := 2; i < len(instructions); i++ {
+		inst := instructions[i]
+
+		// Try to decode as a TransferChecked instruction
+		isTC, sourceAddr, destAddr := tryDecodeTransferChecked(tx, inst)
+		if !isTC {
+			// Not a TransferChecked — keep as non-transfer tail
+			nonTransferTail = append(nonTransferTail, inst)
+			continue
+		}
+
+		if destAddr == expectedMerchantATA.String() {
+			merchantTransfer = &instructions[i]
+		} else {
+			// Fee transfer — safety check: neither source nor destination touches signer or payTo
+			for _, signerAddr := range signerAddresses {
+				if sourceAddr == signerAddr || destAddr == signerAddr {
+					return nil, errors.New("invalid_exact_solana_payload_suspicious_fee_transfer")
+				}
+			}
+			if sourceAddr == payTo || destAddr == payTo {
+				return nil, errors.New("invalid_exact_solana_payload_suspicious_fee_transfer")
+			}
+			// Fee transfer is safe — strip it from output
+		}
+	}
+
+	if merchantTransfer == nil {
+		return nil, errors.New("invalid_exact_svm_payload_no_transfer_instruction")
+	}
+
+	result := []solana.CompiledInstruction{instructions[0], instructions[1], *merchantTransfer}
+	result = append(result, nonTransferTail...)
+	return result, nil
+}
+
+// tryDecodeTransferChecked checks if a compiled instruction is a SPL TransferChecked
+// by inspecting the program ID and data discriminator. Returns whether it's a
+// TransferChecked plus the source and destination addresses.
+//
+// This avoids ResolveInstructionAccounts which doesn't work with ALT-resolved
+// messages. Instead it indexes directly into tx.Message.AccountKeys.
+func tryDecodeTransferChecked(tx *solana.Transaction, inst solana.CompiledInstruction) (bool, string, string) {
+	accountKeys := tx.Message.AccountKeys
+	if int(inst.ProgramIDIndex) >= len(accountKeys) {
+		return false, "", ""
+	}
+	progID := accountKeys[inst.ProgramIDIndex]
+	if progID != solana.TokenProgramID && progID != solana.Token2022ProgramID {
+		return false, "", ""
+	}
+
+	// TransferChecked discriminator = 12, minimum data = 10 bytes (1 disc + 8 amount + 1 decimals)
+	if len(inst.Data) < 10 || inst.Data[0] != 12 {
+		return false, "", ""
+	}
+
+	// TransferChecked accounts: [source(0), mint(1), destination(2), authority(3)]
+	if len(inst.Accounts) < 4 {
+		return false, "", ""
+	}
+
+	sourceIdx := int(inst.Accounts[0])
+	destIdx := int(inst.Accounts[2])
+	if sourceIdx >= len(accountKeys) || destIdx >= len(accountKeys) {
+		return false, "", ""
+	}
+
+	return true, accountKeys[sourceIdx].String(), accountKeys[destIdx].String()
 }

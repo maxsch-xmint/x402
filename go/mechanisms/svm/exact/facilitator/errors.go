@@ -21,6 +21,7 @@ const (
 	ErrMintMismatch                   = "invalid_exact_solana_payload_mint_mismatch"
 	ErrRecipientMismatch              = "invalid_exact_solana_payload_recipient_mismatch"
 	ErrAmountInsufficient             = "invalid_exact_solana_payload_amount_insufficient"
+	ErrSuspiciousFeeTransfer          = "invalid_exact_solana_payload_suspicious_fee_transfer"
 	ErrInvalidFeePayer                = "invalid_exact_solana_invalid_fee_payer"
 	ErrTransactionSigningFailed       = "invalid_exact_solana_transaction_signing_failed"
 	ErrTransactionSimulationFailed    = "invalid_exact_solana_transaction_simulation_failed"

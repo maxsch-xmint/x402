@@ -86,6 +86,7 @@ ERR_AMOUNT_INSUFFICIENT = "invalid_exact_svm_payload_amount_insufficient"
 ERR_FEE_PAYER_MISSING = "invalid_exact_svm_payload_missing_fee_payer"
 ERR_FEE_PAYER_NOT_MANAGED = "fee_payer_not_managed_by_facilitator"
 ERR_FEE_PAYER_TRANSFERRING = "invalid_exact_svm_payload_transaction_fee_payer_transferring_funds"
+ERR_SUSPICIOUS_FEE_TRANSFER = "invalid_exact_svm_payload_suspicious_fee_transfer"
 ERR_SIMULATION_FAILED = "transaction_simulation_failed"
 ERR_TRANSACTION_FAILED = "transaction_failed"
 

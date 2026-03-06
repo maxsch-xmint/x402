@@ -14,6 +14,7 @@ import {
 } from "@solana-program/token-2022";
 import {
   decompileTransactionMessage,
+  decompileTransactionMessageFetchingLookupTables,
   getCompiledTransactionMessageDecoder,
   type Address,
 } from "@solana/kit";
@@ -31,8 +32,8 @@ import {
 } from "../../constants";
 import type { FacilitatorSvmSigner } from "../../signer";
 import type { ExactSvmPayloadV2 } from "../../types";
-import { decodeTransactionFromPayload } from "../../utils";
-import { normalizeTransaction, type NormalizedTransaction } from "../../normalizer";
+import { createRpcClient, decodeTransactionFromPayload } from "../../utils";
+import { normalizeTransaction, type NormalizedTransaction, type NormalizationContext } from "../../normalizer";
 
 /**
  * SVM facilitator implementation for the Exact payment scheme.
@@ -139,28 +140,55 @@ export class ExactSvmScheme implements SchemeNetworkFacilitator {
     }
 
     const compiled = getCompiledTransactionMessageDecoder().decode(transaction.messageBytes);
-    const decompiled = decompileTransactionMessage(compiled);
+    let decompiled;
+    if (
+      "addressTableLookups" in compiled &&
+      compiled.addressTableLookups?.length
+    ) {
+      try {
+        const rpc = createRpcClient(requirements.network);
+        decompiled = await decompileTransactionMessageFetchingLookupTables(
+          compiled,
+          rpc,
+        );
+      } catch {
+        return {
+          isValid: false,
+          invalidReason:
+            "invalid_exact_svm_payload_address_lookup_table_resolution_failed",
+          payer: "",
+        };
+      }
+    } else {
+      decompiled = decompileTransactionMessage(compiled);
+    }
     let instructions = decompiled.instructions ?? [];
 
     // Normalize the transaction (handles Swig, regular, and future wallet types)
+    const context: NormalizationContext = {
+      asset: requirements.asset,
+      payTo: requirements.payTo,
+      signerAddresses,
+    };
     let normalized: NormalizedTransaction;
     try {
       normalized = await normalizeTransaction(
         instructions,
         compiled.staticAccounts ?? [],
         transaction,
+        context,
       );
-    } catch {
+    } catch (error) {
       return {
         isValid: false,
-        invalidReason: "invalid_exact_svm_payload_no_transfer_instruction",
+        invalidReason: error instanceof Error ? error.message : "invalid_exact_svm_payload_no_transfer_instruction",
         payer: "",
       };
     }
     instructions = normalized.instructions;
     const payer = normalized.payer;
 
-    // Instruction count check AFTER flattening (3-6)
+        // Instruction count check AFTER flattening (3-6)
     // - 3 instructions: ComputeLimit + ComputePrice + TransferChecked
     // - 4 instructions: ComputeLimit + ComputePrice + TransferChecked + Lighthouse or Memo
     // - 5 instructions: ComputeLimit + ComputePrice + TransferChecked + Lighthouse + Lighthouse or Memo

@@ -13,11 +13,18 @@ type NormalizedTransaction struct {
 	Payer        string
 }
 
+// NormalizationContext provides payment context for fee filtering during normalization.
+type NormalizationContext struct {
+	Asset           string   // Token mint address
+	PayTo           string   // Merchant owner address
+	SignerAddresses []string // Facilitator fee payer addresses
+}
+
 // TransactionNormalizer knows how to detect and flatten a particular wallet
 // type's transaction layout into a NormalizedTransaction.
 type TransactionNormalizer interface {
 	CanHandle(tx *solana.Transaction) bool
-	Normalize(tx *solana.Transaction) (*NormalizedTransaction, error)
+	Normalize(tx *solana.Transaction, ctx *NormalizationContext) (*NormalizedTransaction, error)
 }
 
 // RegularNormalizer is the fallback normalizer for standard (non-smart-wallet)
@@ -29,7 +36,7 @@ func (r *RegularNormalizer) CanHandle(_ *solana.Transaction) bool {
 	return true
 }
 
-func (r *RegularNormalizer) Normalize(tx *solana.Transaction) (*NormalizedTransaction, error) {
+func (r *RegularNormalizer) Normalize(tx *solana.Transaction, _ *NormalizationContext) (*NormalizedTransaction, error) {
 	payer, err := GetTokenPayerFromTransaction(tx)
 	if err != nil {
 		return nil, err
@@ -50,10 +57,10 @@ var DefaultNormalizers = []TransactionNormalizer{
 
 // NormalizeTransaction runs the default normalizer chain against tx and returns
 // the first successful result.
-func NormalizeTransaction(tx *solana.Transaction) (*NormalizedTransaction, error) {
+func NormalizeTransaction(tx *solana.Transaction, ctx *NormalizationContext) (*NormalizedTransaction, error) {
 	for _, n := range DefaultNormalizers {
 		if n.CanHandle(tx) {
-			return n.Normalize(tx)
+			return n.Normalize(tx, ctx)
 		}
 	}
 	return nil, errors.New("no normalizer found for transaction")
