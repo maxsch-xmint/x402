@@ -89,7 +89,7 @@ func TestRealSwigTx_ParseSwigTransaction(t *testing.T) {
 
 func TestRealSwigTx_NormalizeTransaction(t *testing.T) {
 	tx := decodeTx(t)
-	normalized, err := svm.NormalizeTransaction(tx)
+	normalized, err := svm.NormalizeTransaction(tx, nil)
 	require.NoError(t, err)
 
 	t.Run("payer is swig PDA", func(t *testing.T) {

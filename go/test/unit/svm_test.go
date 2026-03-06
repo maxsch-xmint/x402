@@ -721,7 +721,7 @@ func TestNormalizeTransaction(t *testing.T) {
 			},
 		}
 
-		normalized, err := svm.NormalizeTransaction(tx)
+		normalized, err := svm.NormalizeTransaction(tx, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -755,7 +755,7 @@ func TestNormalizeTransaction(t *testing.T) {
 			},
 		}
 
-		normalized, err := svm.NormalizeTransaction(tx)
+		normalized, err := svm.NormalizeTransaction(tx, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -785,7 +785,7 @@ func TestNormalizeTransaction(t *testing.T) {
 
 		// For a Swig transaction, the payer should be the SwigPDA, not the
 		// token authority (which is what RegularNormalizer would return).
-		normalized, err := svm.NormalizeTransaction(tx)
+		normalized, err := svm.NormalizeTransaction(tx, nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
